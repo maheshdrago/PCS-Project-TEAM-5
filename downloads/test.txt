@@ -1,0 +1,223 @@
+User
+import asyncio
+import json
+import requests
+import os
+import uuid
+import random
+
+class FileServer:
+    def __init__(self):
+        self.peers = set() # Set to store connected peers
+        self.peer_mappings = dict()
+
+    async def handle_peer(self, reader, writer):
+        peer_address = writer.get_extra_info('peername')
+        print(f"New connection from {peer_address}")
+
+        try:
+            while True:
+                data = await reader.read(100)
+                data = data.decode()
+                
+                if not data:
+                    break
+                data = json.loads(data)
+                message = data["message"]
+
+                if message == "list_peers":
+                    peer_list = ", ".join(str(peer) for peer in self.peers)
+                    writer.write(peer_list.encode())
+                    await writer.drain()
+
+                elif message == "REGISTER":
+                    username = data["username"]
+                    password = data['password']
+                    response = requests.post("http://127.0.0.1:5000/register", json = {"username":username, "password":password})
+
+                    writer.write("REGISTERED".encode())
+                    await writer.drain()
+                
+                elif message == "LOGIN":
+                    username = data["username"]
+                    password = data["password"]
+
+                    response = requests.get("http://127.0.0.1:5000/login?username={}&password={}".format(username, password))
+                    data = response.text
+                    if data.lower()=="success":
+                        self.peers.add(username)
+                        self.peer_mappings[peer_address] = username
+
+                        writer.write("Sucess".encode())
+                    else:
+                        writer.write("Fail".encode())
+
+                    await writer.drain()
+
+                elif message == "CREATE":
+                    file_path = data.get("file_path")
+                    await self.receive_file(reader,writer, file_path)
+
+                    writer.write("Sucess".encode())
+                    await writer.drain()
+                else:
+                    print(f"Received invalid message from {peer_address}: {message}")
+
+        except asyncio.CancelledError:
+            pass
+        finally:
+            print("Connection from {} ({}) closed".format(username, peer_address))
+            username = self.peer_mappings[peer_address]
+            self.peers.remove(username)
+
+            writer.close()
+            await writer.wait_closed()
+    
+    def select_random_peer(self):
+        return random.choice(list(self.peers))
+    
+    def generate_chunk_id(self):
+        return str(uuid.uuid4())
+
+    async def receive_file(self, reader,writer, file_path):
+        try:
+            while True:
+             
+                random_peer = self.select_random_peer()
+                
+                if not os.path.exists("./peer_data/{}".format(random_peer)):
+                    os.mkdir("./peer_data/{}".format(random_peer))
+                    
+                chunk_path = "./peer_data/{}/".format(random_peer)
+                chunk_id = self.generate_chunk_id()
+                chunk = await reader.read(1024)
+
+                if not chunk:
+                    print("No Data")
+                    break
+
+                with open(chunk_path+str(chunk_id)+'.txt', 'wb') as file:
+                    file.write(chunk)
+                print("Stored chunk with id {} in peer {}".format(chunk_id, random_peer))
+
+            return
+        except FileNotFoundError:
+            print(f"File not found: {file_path}")
+
+    async def start_server(self, host, port):
+        server = await asyncio.start_server(
+            self.handle_peer, host, port
+        )
+
+        addr = server.sockets[0].getsockname()
+        print(f'Serving on {addr}')
+
+        async with server:
+            await server.serve_forever()
+    
+
+
+if __name__ == "__main__":
+    file_server = FileServer()
+    host, port = "127.0.0.1", 8888  # Change the host and port as needed
+    asyncio.run(file_server.start_server(host, port))
+in this now chunks are stored but if i want to assemble them back how can i do it 
+ChatGPT
+To assemble the chunks back into the original file, you need to read each chunk from the respective peer and append it to the output file. Here's a basic example of how you can achieve this:
+
+python
+Copy code
+import os
+
+class FileAssembler:
+    def __init__(self):
+        self.chunk_size = 1024
+
+    def assemble_file(self, input_folder, output_file):
+        with open(output_file, 'wb') as output_file:
+            chunk_id = 0
+
+            while True:
+                chunk_path = os.path.join(input_folder, f"{chunk_id}.txt")
+                
+                if not os.path.exists(chunk_path):
+                    break
+
+                with open(chunk_path, 'rb') as chunk_file:
+                    chunk_data = chunk_file.read(self.chunk_size)
+                    output_file.write(chunk_data)
+
+                chunk_id += 1
+
+        print(f"Assembled file: {output_file.name}")
+
+if __name__ == "__main__":
+    assembler = FileAssembler()
+    input_folder = "./peer_data/peer_name/"  # Change this to the specific peer's folder
+    output_file = "assembled_file.txt"  # Change this to the desired output file name
+
+    assembler.assemble_file(input_folder, output_file)
+Make sure to replace "peer_name" with the actual peer's name or ID. This script assumes that the chunks are named according to their IDs (e.g., "0.txt", "1.txt", "2.txt", etc.) and are stored in the specified folder.
+
+This is a basic example, and you may need to enhance it based on your specific use case. Consider error handling, validation, and any additional requirements specific to your application.
+
+User
+from DB_SERVER import db
+
+class Users(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(30), unique=True, nullable=False)
+    password = db.Column(db.String(40), nullable= False)
+
+class ChunkFileMappings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(300), unique=True)
+    mappings = db.relationship('ChunkMappings',backref="chunkfilemappings", lazy=True)
+
+class ChunkMappings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    chunk_number = db.Column(db.Integer, nullable=False)
+    chunk_peer = db.Column(db.String(100))
+    chunk_id = db.Column(db.String(300))
+    fileMapping_id = db.Column(db.Integer, db.ForeignKey("chunkfilemappings.id"))sqlalchemy.exc.NoReferencedTableError: Foreign key associated with column 'chunk_mappings.fileMapping_id' could not find table 'chunkfilemappings' with which to generate a foreign key to target column 'id'
+ChatGPT
+The error you're encountering, sqlalchemy.exc.NoReferencedTableError, suggests that SQLAlchemy couldn't find the referenced table for the foreign key relationship. This issue usually occurs when defining the relationships between tables, and it often involves the order in which classes are defined.
+
+In your case, it seems like ChunkMappings references ChunkFileMappings, but SQLAlchemy might not find the ChunkFileMappings table because of the order in which these classes are defined.
+
+To resolve this, try the following:
+
+Ensure that the ChunkFileMappings class is defined before the ChunkMappings class in your code.
+
+Make sure that the table names are correct in the ForeignKey references. In the provided code, the table name for the foreign key in ChunkMappings is specified as "chunkfilemappings", which should match the actual table name.
+
+Here's an example with corrected order:
+
+python
+Copy code
+from DB_SERVER import db
+
+class Users(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(30), unique=True, nullable=False)
+    password = db.Column(db.String(40), nullable=False)
+
+class ChunkFileMappings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(300), unique=True)
+    mappings = db.relationship('ChunkMappings', backref="chunkfilemappings", lazy=True)
+
+class ChunkMappings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    chunk_number = db.Column(db.Integer, nullable=False)
+    chunk_peer = db.Column(db.String(100))
+    chunk_id = db.Column(db.String(300))
+    fileMapping_id = db.Column(db.Integer, db.ForeignKey("chunk_file_mappings.id"))
+In the ForeignKey reference, it's important to use the actual table name, which is typically in lowercase and snake_case for models named in CamelCase.
+
+Make sure to adjust the table names as needed and try running the application again. If the issue persists, consider checking other parts of your code where database models and relationships are defined.
+
+
+
+
+
