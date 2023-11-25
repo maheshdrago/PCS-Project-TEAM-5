@@ -25,4 +25,4 @@ def login():
     if user and user.password==password:
         return "Success"
     else:
-        return "Fail"
+        return "Failed"
