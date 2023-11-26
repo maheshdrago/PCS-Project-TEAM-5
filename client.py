@@ -1,22 +1,12 @@
 import asyncio
 import json
 
-async def send_message(reader, writer, message, file_path=None):
+async def send_message(reader, writer, message):
     json_message = json.dumps(message)
     print(f"Sending JSON: {json_message}")
     writer.write(json_message.encode())
 
     await writer.drain()
-
-    if file_path:
-        with open(file_path, 'rb') as file:
-            while True:
-                chunk = file.read(1024)
-                if not chunk:
-                    break
-                writer.write(chunk)
-                await writer.drain()
-        writer.close()
 
     data = await reader.read(100)
     response = data.decode()
@@ -26,7 +16,7 @@ async def main():
     host = input('Enter IP address: ')
     port = int(input("Enter Port number: "))
 
-    commands = ["Register", "Login", "Create", "Delete", "Restore", "Exit", "List_Peers"]
+    commands = ["Register", "Login", "Create", "Delete", "Restore", "Exit", "List_Peers", "Download"]
     reader, writer = await asyncio.open_connection(host, port)
 
     try:
@@ -78,7 +68,25 @@ async def main():
                         "message": "CREATE",
                         "file_path": file_path
                     }
-                    await send_message(reader, writer, message, file_path)
+                    await send_message(reader, writer, message)
+
+                elif choice.lower() == "download":
+                    filename = input("Enter the file name: ")
+                    message = {
+                        "message":"DOWNLOAD",
+                        "filename":filename
+                    }
+
+                    await send_message(reader, writer, message)
+                
+                elif choice.lower() == "delete":
+                    filename = input("Enter the file name: ")
+                    message = {
+                        "message":"DELETE",
+                        "filename":filename
+                    }
+
+                    await send_message(reader, writer, message)
 
             except (ValueError, IndexError):
                 print("Invalid choice. Please enter a valid number or 'Exit' to quit.")
