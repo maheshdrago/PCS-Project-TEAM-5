@@ -1,100 +1,340 @@
 import asyncio
 import json
+import os
+import requests
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.backends import default_backend
 
-async def send_message(reader, writer, message):
-    json_message = json.dumps(message)
-    print(f"Sending JSON: {json_message}")
-    writer.write(json_message.encode())
 
-    await writer.drain()
 
-    data = await reader.read(100)
-    response = data.decode()
-    print(f"Received: {response}")
+class Client:
+    def __init__(self):
+        self.peer_server_address = None
+        self.username = ""
+        self.is_logged = False
+        self.public_key = None
 
-async def main():
-    host = input('Enter IP address: ')
-    port = int(input("Enter Port number: "))
+    async def send_message(self, reader, writer, message):
+        if message["message"]!= "REGISTER_IP":
+            
+            json_message = json.dumps(message)
+            print(json_message)
+            encrypted_message = self.public_key.encrypt(
+                json_message.encode(),
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            print(f"Sending JSON: {json_message}")
+            writer.write(encrypted_message)
+        else:
+            json_message = json.dumps(message)
+            print(f"Sending JSON: {json_message}")
+            writer.write(json_message.encode())
 
-    commands = ["Register", "Login", "Create", "Delete", "Restore", "Exit", "List_Peers", "Download"]
-    reader, writer = await asyncio.open_connection(host, port)
+        await writer.drain()
 
-    try:
+        data = await reader.read(100)
+        response = data.decode()
+        print(f"Received: {response}")
+    
+    def generate_key_pair(self):
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+            backend=default_backend()
+        )
+
+        public_key = private_key.public_key()
+
+        private_key_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        ).decode()
+
+        public_key_pem = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode()
+
+        return private_key_pem, public_key_pem
+
+
+    async def handle_peer_connection(self, reader, writer):
         while True:
-            # Display available commands
+            data = await reader.read(10000)
+            if not data:
+                break
+
+            response = data.decode()
+            response = json.loads(response)
+            try:
+                filename = response["filename"]
+                extension = filename.split(".")[-1]
+
+                
+                if not os.path.exists("./peer_data/{}".format(self.username)):
+                    os.mkdir("./peer_data/{}".format(self.username))
+                    
+                chunk_path = "./peer_data/{}/".format(self.username)
+                chunk_id = response["chunk_id"]
+                chunk = response["chunk"]
+                
+                if extension!='exe':
+                    chunk_bytes = chunk.encode('utf-8')
+                    with open(chunk_path+str(chunk_id)+'.{}'.format("bin"), 'wb') as output_file:
+                        output_file.write(chunk_bytes)
+                else:
+                    with open(chunk_path+str(chunk_id)+'.{}'.format("bin"), 'w') as output_file:
+                        output_file.write(chunk)
+            except Exception as e:
+                print(str(e.args))
+
+        writer.close()
+
+    async def start_server_for_peers(self):
+        server = await asyncio.start_server(
+            self.handle_peer_connection,  '127.0.0.1', 0
+        )
+
+        addr = server.sockets[0].getsockname()
+        print(f'Peer server listening on {addr}')
+        self.peer_server_address = addr
+    
+    def check_permission(self, filename, permission):
+        resp = requests.get("http://127.0.0.1:5000/queryPermissions?username={}&permission={}&filename={}".format(self.username, permission, filename)).json()
+        if resp["status"]=="Success":
+            return True
+        else:
+            return False
+    
+    async def register(self):
+        username = input("Enter Username:")
+        password = input("Password")
+
+        response = requests.get("http://127.0.0.1:5000/checkUsername?username={}".format(username))
+        data = response.json()
+        print(data)
+        if data["status"] == "Success":
+            self.private_key, self.public_key = self.generate_key_pair()
+            response = requests.post("http://127.0.0.1:5000/register", json = {"username":username, "password":password})
+            
+            key_response = requests.post("http://127.0.0.1:5000/addKeys",\
+                                            json={"username":username, "private_key":str(self.private_key), "public_key": str(self.public_key)}
+            )
+            
+            key_status = key_response.json()
+            if key_status["status"] == "Success":
+                print("Keys Generation Successful!")
+            else:
+                print("Keys Generation Failed!")
+        else:
+            print("Username already exists!!")
+    
+    async def login(self):
+        username = input("Enter Username:")
+        password = input("Password")
+        
+        response = requests.get("http://127.0.0.1:5000/login?username={}&password={}".format(username, password))
+        data = response.text
+        if data.lower()=="success":
+            self.username = username
+            self.is_logged = True
+
+            response= requests.get("http://127.0.0.1:5000/getKey?username={}&type={}".format(username, "public"))
+            data = response.json()
+
+            if data["status"] == "Success":
+                public_key = data["key"]
+
+                self.public_key = serialization.load_pem_public_key(
+                    public_key.encode(),
+                    backend=default_backend()
+                )
+
+            print("Sucess")
+            return True
+        else:
+            print("Fail")
+            return False
+        
+
+    async def main(self):
+        host = input('Enter IP address: ')
+        port = int(input("Enter Port number: "))
+
+        while not self.is_logged:
+            commands = ["Register", "Login"]
+
             print("\nSelect Operation:")
             for i in range(len(commands)):
                 print("\n{}. {}".format(i + 1, commands[i]))
 
-            # Get user input
             choice = input("Enter the operation or 'Exit' to quit: ")
             if choice.lower() == "exit":
                 break
 
             try:
                 if choice.lower()=="register":
-                    username = input("Enter Username:")
-                    password = input("Password")
-
-                    message = {
-                        "message": "REGISTER",
-                        "username": username,
-                        "password": password
-                    }
-
-                    await send_message(reader, writer, message)
+                    await self.register()
                 
                 elif choice.lower()=="login":
-                    username = input("Enter Username:")
-                    password = input("Password")
+                    await self.login()
+
+            except Exception as e:
+                print(str(e.args))
+
+        commands = ["Create", "Delete", "Restore", "Exit", "List_Peers", "Download", "Write"]
+        
+        reader, writer = await asyncio.open_connection(host, port)
+        json_message = json.dumps({
+                        "message":"REGISTER_IP",
+                        "username":self.username,
+                    })
+        print(f"Sending JSON: {json_message}")
+        writer.write(json_message.encode())
+
+        await writer.drain()
+        
+
+        await self.start_server_for_peers()
+
+        try:
+            while True:
+                # Display available commands
+                print("\nSelect Operation:")
+                for i in range(len(commands)):
+                    print("\n{}. {}".format(i + 1, commands[i]))
+
+                # Get user input
+                choice = input("Enter the operation or 'Exit' to quit: ")
+                if choice.lower() == "exit":
+                    break
+
+                try:
+                    if choice.lower()=="list_peers":
+                        message = {
+                            "message":"list_peers"
+                        }
+                        await self.send_message(reader, writer, message)
                     
-                    message = {
-                        "message": "LOGIN",
-                        "username": username,
-                        "password": password
-                    }
+                    elif choice.lower() == "create":
+                        if self.is_logged:
+                            file_path = input("Enter the path of the file to upload: ")
+                            auth_addition = input("Want to give access to other users? Yes or No:")
+                            auths = {}
 
-                    await send_message(reader, writer, message)
+                            if auth_addition.lower()=="yes":
+                                while True:
+                                    username = input("Enter the username you want to permission to: (quit to stop)")
 
-                elif choice.lower()=="list_peers":
-                    message = {
-                        "message":"list_peers"
-                    }
-                    await send_message(reader, writer, message)
-                
-                elif choice.lower() == "create":
-                    file_path = input("Enter the path of the file to upload: ")
-                    message = {
-                        "message": "CREATE",
-                        "file_path": file_path
-                    }
-                    await send_message(reader, writer, message)
+                                    if username=="quit":
+                                        break
 
-                elif choice.lower() == "download":
-                    filename = input("Enter the file name: ")
-                    message = {
-                        "message":"DOWNLOAD",
-                        "filename":filename
-                    }
+                                    resp = requests.get("http://127.0.0.1:5000/userValid?username={}".format(username)).json()
+                                    if resp["status"]=="Success":
+                                        print("Username valid!")
+                                        permissions = input("Enter the permissions(DELTE,DOWNLOAD,WRITE):").split(',')
+                                        print("Permission Granted!")
+                                    else:
+                                        print("Invalid Username!")
 
-                    await send_message(reader, writer, message)
-                
-                elif choice.lower() == "delete":
-                    filename = input("Enter the file name: ")
-                    message = {
-                        "message":"DELETE",
-                        "filename":filename
-                    }
+                                    auths[username] = permissions
 
-                    await send_message(reader, writer, message)
+                            auths[self.username] = ["DELETE","RESTORE","DOWNLOAD","WRITE"]
+                            message = {
+                                "message": "CREATE",
+                                "file_path": file_path,
+                                "permissions": auths
+                            }
+                            await self.send_message(reader, writer, message)
+                        else:
+                            print("Login to command the system!!")
 
-            except (ValueError, IndexError):
-                print("Invalid choice. Please enter a valid number or 'Exit' to quit.")
+                    elif choice.lower() == "download":
+                        if self.is_logged:
+                            filename = input("Enter the file name: ")
+                            if self.check_permission(filename=filename, permission="DOWNLOAD"):
+                                print("Permission Available!")
+                                message = {
+                                    "message":"DOWNLOAD",
+                                    "filename":filename
+                                }
 
-    finally:
-        print("Closing the connection")
-        writer.close()
-        await writer.wait_closed()
+                                await self.send_message(reader, writer, message)
+                            else:
+                                print("Permission Not Available!")
+                        else:
+                            print("Login to command the system!!")
+                    
+                    elif choice.lower() == "delete":
+                        if self.is_logged:
+                            filename = input("Enter the file name: ")
+                            if self.check_permission(filename=filename, permission="DELETE"):
+                                print("Permission Available!")
+                                message = {
+                                    "message":"DELETE",
+                                    "filename":filename
+                                }
+
+                                await self.send_message(reader, writer, message)
+                            else:
+                                print("Permission Not Available!")
+                        else:
+                            print("Login to command the system!!")
+
+                    elif choice.lower() == "restore":
+                        if self.is_logged:
+                            filename = input("Enter the file name to restore: ")
+                            if self.check_permission(filename=filename, permission="RESTORE"):
+                                print("Permission Available!")
+                                message = {
+                                    "message":"RESTORE",
+                                    "filename":filename
+                                }
+
+                                await self.send_message(reader, writer, message)
+                            else:
+                                print("Permission Not Available!")
+                        else:
+                            print("Login to command the system!!")
+
+                    elif choice.lower() == "write":
+                        if self.is_logged:
+                            filename = input("Enter the file name to edit: ")
+                            data = input("Enter data to append: ")
+
+                            if self.check_permission(filename=filename, permission="WRITE"):
+                                print("Permission Available!")
+                                message = {
+                                    "message":"WRITE",
+                                    "filename":filename,
+                                    "data": data
+                                }
+
+                                await self.send_message(reader, writer, message)
+                            else:
+                                print("Permission Not Available!")
+                        else:
+                            print("Login to command the system!!")
+
+                except Exception as e:
+                    
+                    print("Invalid choice. Please enter a valid number or 'Exit' to quit.", str(e.args))
+
+        finally:
+
+            print("Closing the connection")
+            print("Closing the connection")
+            writer.close()
+            await writer.wait_closed()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    client = Client()
+    asyncio.run(client.main())
