@@ -51,7 +51,5 @@ Our P2P file storage system operates through a complex mechanism that integrates
 ## Architecture Diagram
 
 <picture>
-    <img alt="UML" src="https://drive.google.com/file/d/1g1RdIFGKHmaKFQECVq6BxvNNYl_XjCcf/view?usp=sharing">
+    <img alt="UML" src="https://drive.google.com/uc?export=view&id=1g1RdIFGKHmaKFQECVq6BxvNNYl_XjCcf">
 </picture>
-
-
