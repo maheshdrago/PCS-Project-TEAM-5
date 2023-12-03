@@ -5,6 +5,7 @@ class Users(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(30), unique=True, nullable=False)
     password = db.Column(db.String(40), nullable=False)
+    keys = db.relationship('Keys', backref="user", cascade="all,delete", uselist=False)
 
 class ChunkFileMappings(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -17,3 +18,15 @@ class ChunkMappings(db.Model):
     chunk_peer = db.Column(db.String(100))
     chunk_id = db.Column(db.String(300))
     fileMapping_id = db.Column(db.Integer, db.ForeignKey("chunk_file_mappings.id"))
+
+class Permissions(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(300))
+    permissions = db.Column(db.String(100))
+    username = db.Column(db.String(100))
+
+class Keys(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    public_key = db.Column(db.String(1000))
+    private_key = db.Column(db.String(1000))
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
