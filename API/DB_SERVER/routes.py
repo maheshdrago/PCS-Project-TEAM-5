@@ -1,6 +1,12 @@
 from DB_SERVER import app, db
-from DB_SERVER.models import Users, ChunkMappings, ChunkFileMappings, Permissions, Keys
+from DB_SERVER.models import Users, ChunkMappings, ChunkFileMappings, Permissions, Keys, Directories, DirPermissions
 from flask import request, jsonify
+import datetime
+import logging
+
+
+logging.basicConfig(filename="app.log", level=logging.DEBUG,
+                    format='%(asctime)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
 
 
 @app.route("/register", methods=['POST'])
@@ -10,10 +16,12 @@ def register():
         username = data['username']
         password = data['password']
 
-        user = Users(username=username, password=password)
+        user = Users(username=username)
+        user.set_password(password=password)
+
         db.session.add(user)
         db.session.commit()
-
+        logging.info("User with Username : {} Registerd Successfully".format(username))
         return "User with Username : {} Registerd Successfully".format(username)
     except Exception as e:
         print(str(e.args))
@@ -26,10 +34,48 @@ def login():
 
     user = Users.query.filter_by(username=username).first()
 
-    if user and user.password==password:
+
+    if user and user.check_password(password):
+        logging.info("User with Username : {} logged in Successfully".format(username))
         return "Success"
     else:
+        logging.info("User with Username : {} login failed ".format(username))
         return "Fail"
+
+
+
+@app.route("/getDirList", methods=["GET"])
+def getDirList():
+
+    data = [i.directory_name for i in Directories.query.all()]
+    return {
+        "data":data
+    }
+
+@app.route("/hasDirPermission", methods=["GET"])
+def hasDirPermission():
+    username = request.args.get("username")
+    dirName = request.args.get("dirName")
+    permission = request.args.get("permission")
+
+    permissions = DirPermissions.query.filter_by(dir_name=dirName, username=username).first().permissions.split(",")
+    if permission in permissions:
+        return {
+            "status":"Success"
+        }
+    else:
+        return {
+            "status":"Fail"
+        }
+
+@app.route("/createDir", methods=["GET"])
+def createDir():
+    name = request.args.get("name")
+
+    db.session.add(Directories(directory_name=name))
+    db.session.commit()
+    return "Success"
+    
     
 @app.route("/addChunkMapping", methods=["POST", "PATCH"])
 def chunkMapping():
@@ -38,9 +84,17 @@ def chunkMapping():
             data = request.json
             pieces = data["pieces"]
             filename = data["filename"]
+            has_dir = data["has_dir"]
+            
             mapping_objs = []
             
-            fileMapping = ChunkFileMappings(filename=filename)
+            if has_dir:
+                directory = data["directory"]
+                dir = Directories.query.filter_by(directory_name=directory).first()
+                fileMapping = ChunkFileMappings(filename=filename, directories=dir)
+            else:
+                fileMapping = ChunkFileMappings(filename=filename)
+
             db.session.add(fileMapping)
 
             for piece in pieces:
@@ -55,8 +109,12 @@ def chunkMapping():
             db.session.add_all(mapping_objs)
             db.session.commit()
 
+            logging.info("Chunk mappings done for filename: {} ".format(filename))
+
             return "Success"
         except Exception as e:
+            logging.info("Chunk mappings failed for filename: {} at {}".format(filename, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+
             return str(e.args)
     else:
         try:
@@ -78,9 +136,12 @@ def chunkMapping():
             
             db.session.add_all(mapping_objs)
             db.session.commit()
+            logging.info("Chunk mappings updated for filename: {} ".format(filename))
 
             return "Success"
         except Exception as e:
+            logging.info("Chunk mappings updation failed for filename: {}".format(filename))
+
             return str(e.args)
 
     
@@ -90,7 +151,7 @@ def retrieveChunks():
     try:
         filename = request.args.get('filename')
         fileMapping = ChunkFileMappings.query.filter_by(filename=filename).first()
-        print(fileMapping)
+
         if fileMapping:
             chunks = fileMapping.mappings
             
@@ -103,11 +164,13 @@ def retrieveChunks():
                     "chunk_id":i.chunk_id
                 })
             
+            logging.info("chunks retrieved for filename: {} ".format(filename))
             return jsonify({
                 "status":"success",
                 "chunks":pieces
             })
         else:
+            logging.info("chunks retrieval failed due to file not found error for filename: {} ".format(filename))
             return jsonify({
                 "status":"File not Found"
             })
@@ -134,6 +197,8 @@ def deleteChunks():
             
             db.session.delete(fileMapping)
             db.session.commit()
+            
+            logging.info("Chunks deleted for filename: {} ".format(filename))
 
             return jsonify({
                 "status":"success",
@@ -179,6 +244,8 @@ def userValid():
         user = Users.query.filter_by(username=username).first()
 
         if user:
+            logging.info("user validation for : {} ".format(username))
+
             return jsonify({
                 "status":"Success",
             })
@@ -204,12 +271,37 @@ def addPermissions():
         db.session.add(permission)
         db.session.commit()
         
+        logging.info("User Permissions {} set for {} for file: {}".format(permission, username, filename))
+
         return jsonify({
             "status":"Success",
         })
         
     except Exception as e:
-        print(str(e.args))
+        return jsonify({
+            "status":str(e.args),
+        })
+
+@app.route("/addDirPermissions", methods=["POST"])
+def addDirPermissions():
+    try:
+        data = request.json
+        permissions = data['permissions']
+        username = data['username']
+        dirName = data['dirName']
+
+        permission = DirPermissions(dir_name=dirName, permissions=permissions, username=username)
+
+        db.session.add(permission)
+        db.session.commit()
+        
+        logging.info("User Permissions {} set for {} for dir: {}".format(permission, username,dirName))
+
+        return jsonify({
+            "status":"Success",
+        })
+        
+    except Exception as e:
         return jsonify({
             "status":str(e.args),
         })
@@ -264,13 +356,16 @@ def addKeys():
         username = data['username']
         public_key = data['public_key']
         private_key = data['private_key']
+        fernet_key = data["fernet_key"]
 
         user = Users.query.filter_by(username=username).first()
 
         if user:
-            keys_obj = Keys(public_key=public_key, private_key=private_key, user=user)
+            keys_obj = Keys(public_key=public_key, private_key=private_key,fernet_key=fernet_key, user=user)
             db.session.add(keys_obj)
             db.session.commit()
+            
+            logging.info("Keys added for user : {}".format( username))
 
             return jsonify({
                 "status":"Success",
@@ -284,6 +379,18 @@ def addKeys():
     except Exception as e:
         return str(e.args)
 
+@app.route("/listFiles", methods=["GET"])
+def listFiles():
+    try:
+        files = [i.filename for i in ChunkFileMappings.query.all()]
+        return jsonify({
+            "status":"Success",
+            "files":files
+        })
+    
+    except Exception as e:
+        return str(e.args)
+
 @app.route("/getKey", methods=["GET"])
 def getKey():
     try:
@@ -294,21 +401,31 @@ def getKey():
 
         if user:
             keys = user.keys
+            logging.info("Keys accessed of user: {} at {}".format(username, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+
             if type == "public":
                 return jsonify({
                     "status":"Success",
                     "key": keys.public_key
                 })
-            else:
+            elif type=="private":
                 return jsonify({
                     "status":"Success",
                     "key": keys.private_key
                 })
-        
+            else:
+                return jsonify({
+                    "status":"Success",
+                    "key": keys.fernet_key
+                })
+            
         else:
+            logging.warning("Keys accessed of user : {} failed at {}".format(username, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
             return jsonify({
                 "status":"Fail"
             })
         
+        
     except Exception as e:
         return str(e.args)
+
