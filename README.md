@@ -41,7 +41,7 @@ Our P2P file storage system operates through a complex mechanism that integrates
 ## Class Diagrams
 
 <picture>
-  <img alt="UML" src="https://drive.google.com/uc?export=view&id=1z0d3SA2_k0UmDwPW3wC7qwc4C5KH0W0o"/>
+  <img alt="UML" src="https://drive.google.com/uc?export=view&id=1B2JkK1telHQn4qSOXSujZORIfy2ok7BC"/>
 </picture>
 
 <picture>
