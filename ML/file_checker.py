@@ -1,4 +1,4 @@
-# For testing if a file is a probable malware of not!
+# For testing if a file is a malicious or not!
 
 import array
 import math
@@ -162,13 +162,13 @@ def extract_info(fpath):
         res['ResourcesMinSize'] = 0
         res['ResourcesMaxSize'] = 0
 
-    # Load configuration size
+    # configuring load size
     try:
         res['LoadConfigurationSize'] = pe.DIRECTORY_ENTRY_LOAD_CONFIG.struct.Size
     except AttributeError:
         res['LoadConfigurationSize'] = 0
 
-    # Version configuration size
+    #  configuring version size
     try:
         version_info = get_version_info(pe)
         res['VersionInformationSize'] = len(version_info.keys())
